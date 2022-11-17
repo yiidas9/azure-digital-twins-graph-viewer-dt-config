@@ -1,0 +1,93 @@
+name: Deploy for d22(Develop) Environment (Including build and push)
+
+on:
+  push:
+    branches:
+      - 'develop'
+    paths:
+      - WebAPI/**
+      - ClientApp/**
+      - '!docs'
+      - '!test'
+      - '!tools'
+      - '!**/*.md'
+      - '!**/*.txt'
+      - '!Lambda'
+      - '!.donut_mold'
+      - '!demo'
+  workflow_dispatch:
+    inputs:
+      system_id:
+        description: 'system id of deploy target environment(d22)'
+        default: 'd22'
+        required: true
+
+jobs:
+  set-short-sha:
+    runs-on: [ self-hosted ]
+    if: ${{ (github.event_name != 'workflow_dispatch') || (github.event.inputs.system_id == 'd22') }}
+    outputs:
+      SHORT_SHA: ${{ steps.set-short-sha.outputs.SHORT_SHA }}
+
+    steps:
+      - name: set short sha
+        id: set-short-sha
+        run: echo "::set-output name=SHORT_SHA::`echo ${{ github.sha }} | cut -c -7`"
+
+  build-and-push:
+    needs: [ set-short-sha ]
+    runs-on: [ self-hosted ]
+
+    strategy:
+      matrix:
+        source: [ui, backend]
+        include:
+          - source: ui
+            app-path: ClientApp
+          - source: backend
+            app-path: WebAPI/src
+
+    steps:
+
+      - name: downcase REPO
+        run: |
+          echo "REPO=${GITHUB_REPOSITORY,,}" >>${GITHUB_ENV}
+
+      - name: build and push docker images
+        uses: AzbilGarage/docker-build-and-push-action@master
+        with:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          REPOSITORY: ${{ env.REPO }}
+          IMAGE_TAG: ${{ matrix.source }}-${{ needs.set-short-sha.outputs.SHORT_SHA }}
+          PATH: ${{ matrix.app-path }}
+
+  deploy:
+    needs: [ set-short-sha, build-and-push ]
+    runs-on: [ self-hosted ]
+    environment: dev-environment
+    env:
+      SYSTEM_ID: d22
+      UPDATE_KEY: ImageTag
+
+    strategy:
+      matrix:
+        source: [ui, backend]
+        include:
+          - source: ui
+            stack_name: 477
+          - source: backend
+            stack_name: 476
+
+    steps:
+      - name: deploy (update cloudformation stacks)
+        uses: AzbilGarage/update-cloudformation-stack@main
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          STACK_NAME: ${{ github.event.inputs.system_id || env.SYSTEM_ID }}-${{ matrix.stack_name }}
+          UPDATE_KEY: ${{ env.UPDATE_KEY }}
+          UPDATE_VALUE: ${{ matrix.source }}-${{ needs.set-short-sha.outputs.SHORT_SHA }}

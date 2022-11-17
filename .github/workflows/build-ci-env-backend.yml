@@ -1,0 +1,41 @@
+name: build automatic test env for backend
+
+on:
+  push:
+    branches:
+      - 'develop'
+    paths:
+      - tools/CI/BuildEnv/backend/**
+      - '!**/*.md'
+      - '!**/*.txt'
+  workflow_dispatch:
+
+jobs:
+  set-short-sha:
+    runs-on: [ self-hosted ]
+    outputs:
+      SHORT_SHA: ${{ steps.set-short-sha.outputs.SHORT_SHA }}
+
+    steps:
+      - name: set short sha
+        id: set-short-sha
+        run: echo "::set-output name=SHORT_SHA::`echo ${{ github.sha }} | cut -c -7`"
+
+  build:
+    needs: [ set-short-sha ]
+    runs-on: [ self-hosted ]
+    env:
+      REPOSITORY_NAME: i18app-platform/portal
+      APP_PATH: tools/CI/BuildEnv/backend
+
+    steps:
+      - name: build docker images
+        uses: AzbilGarage/docker-build-and-push-action@master
+        with:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          REPOSITORY: ${{ env.REPOSITORY_NAME }}
+          IMAGE_TAG: ci-env-backend-${{ needs.set-short-sha.outputs.SHORT_SHA }}
+          PATH: ${{ env.APP_PATH }}

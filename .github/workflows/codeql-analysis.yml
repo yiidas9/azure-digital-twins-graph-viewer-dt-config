@@ -1,0 +1,64 @@
+name: "CodeQL"
+
+on:
+  push:
+    branches:
+      - master
+      - develop
+      - feature/V1.1.0
+    tags:
+      - '*'
+  pull_request:
+    branches:
+      - master
+      - develop
+      - feature/V1.1.0
+    paths:
+      - WebAPI/src/**
+      - ClientApp/src/**
+      - '!demo'
+      - '!docs'
+      - '!**/*.md'
+      - '!**/*.txt'
+      - '.github/workflows/codeql-analysis.yml'
+      - '.github/github/codeql-config.yml'
+
+jobs:
+  analyze:
+    name: Analyze
+    runs-on: [ self-hosted ]
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'csharp', 'javascript' ]
+
+    steps:
+    # https://githubmemory.com/repo/github/codeql-action/issues/611
+    - name: Clear previous database
+      run: |
+        rm -rf "${{ runner.temp }}/codeql_databases"
+
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - if: matrix.language == 'csharp'
+      name: Setup dotnet
+      uses: actions/setup-dotnet@v2
+      with:
+        dotnet-version: 6.0.300
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v2
+      with:
+        languages: ${{ matrix.language }}
+        config-file: ./.github/github/codeql-config.yml
+        queries: +security-and-quality
+
+    - if: matrix.language == 'csharp'
+      run: |
+        cd WebAPI/src
+        dotnet build /p:UseSharedCompilation=false
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v2

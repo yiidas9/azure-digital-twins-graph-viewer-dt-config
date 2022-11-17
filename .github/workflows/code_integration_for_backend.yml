@@ -1,0 +1,106 @@
+name: Code Integration for backend
+
+on:
+  push:
+    branches:
+      - develop
+  pull_request:
+    branches:
+      - develop
+    paths:
+      - WebAPI/src/**
+      - '!ClientApp/src/**'
+      - '!docs'
+      - '!**/*.md'
+      - '!**/*.txt'
+      - '.github/workflows/code_integration_for_backend.yml'
+  workflow_dispatch:
+
+jobs:
+  PreProcess:
+    runs-on: [ self-hosted ]
+    outputs:
+      ecr_username: ${{ steps.login-ecr.outputs.docker_username_685234147769_dkr_ecr_ap_northeast_1_amazonaws_com }}
+      ecr_password: ${{ steps.login-ecr.outputs.docker_password_685234147769_dkr_ecr_ap_northeast_1_amazonaws_com }}
+    env:
+      AWS_REGION: ap-northeast-1
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-northeast-1
+
+      - name: Login to Amazon ECR Private
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+  CI:
+    needs: PreProcess
+    runs-on: [ self-hosted ]
+    env:
+      AZBIL_INFRA_OBJSTOR_LOCAL_ROOTPATH: ${{ github.workspace }}/WebAPI/test/TestData/FunctionalTest/Config/Tenants/objStorage
+    container:
+      image: 685234147769.dkr.ecr.ap-northeast-1.amazonaws.com/i18app-platform/portal:ci-env-backend-ffe8ec7
+      credentials:
+        username: ${{ needs.PreProcess.outputs.ecr_username }}
+        password: ${{ needs.PreProcess.outputs.ecr_password }}
+
+    services:
+      db:
+        image: mcr.microsoft.com/mssql/server:2017-latest
+        ports:
+          - 1433:1433
+        env:
+          ACCEPT_EULA: Y
+          MSSQL_SA_PASSWORD: '12345!Azbil'
+          MSSQL_PID: 'Developer'
+          MSSQL_MEMORY_LIMIT_MB: 2048
+          TZ: 'Asia/Tokyo'
+        options: >-
+          --health-cmd "/opt/mssql-tools/bin/sqlcmd -U sa -P $MSSQL_SA_PASSWORD -Q 'SELECT 1' -b -o /dev/null"
+          --health-interval 20s
+          --health-timeout 10s
+          --health-retries 10
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: preparation
+      run: |
+        sed -i -e '3 s/127\.0\.0\.1\|localhost/db/' WebAPI/src/appsettings.Test.json
+        bash WebAPI/src/db/db_create.sh -y -t
+        bash WebAPI/src/db/table_create.sh -y -t
+
+    - name: build checking
+      run: bash WebAPI/src/build_check_for_CI.sh
+
+    - name: unit test
+      run: |
+        echo Entered the build phase...
+        echo unit test started on `date`
+        cd $GITHUB_WORKSPACE/WebAPI/src
+        dotnet restore
+        export ASPNETCORE_ENVIROMENT=Test
+        export AZBIL_REGION=ap-northeast-1
+        cd $GITHUB_WORKSPACE/WebAPI/test
+        LANG=ja-JP dotnet test --logger "trx;LogFileName=TestResults.trx" --collect:"XPlat Code Coverage"
+        echo unit test has finished.
+
+    - name: metrics checking
+      run : |
+        echo metrics analysis started on `date`
+        cd $GITHUB_WORKSPACE/WebAPI/src
+        cscale .
+        if grep -q "Result : NG" CodeMetricsReport.html; then
+          echo "メトリクス解析結果に問題があります。"
+          exit 1
+        else
+          echo "メトリクス解析結果に問題はありませんでした。"
+        fi
+        echo metrics analysis has finished.
+
+    - if: ${{ always() }}
+      name: cleaning work space
+      run : find $GITHUB_WORKSPACE/. -name . -o -prune -exec rm -rf -- {} + || true
